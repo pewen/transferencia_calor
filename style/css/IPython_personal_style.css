@@ -41,8 +41,8 @@ div.text_cell_render{
     line-height: 140%;
     font-size: 125%;
     font-weight: 400;
-    margin-left:auto;
-    margin-right:auto;
+    margin-left:0px;
+    margin-right:0px;
 }
 /* Formatting for header cells */
 .text_cell_render h1 {
