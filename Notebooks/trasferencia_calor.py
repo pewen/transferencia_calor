@@ -1,10 +1,31 @@
 import numpy as np
 
+#To solve implicit method
+from scipy import sparse as sp
+from scipy.sparse import linalg as splinalg
+from scipy.sparse.linalg import spsolve
+
 import matplotlib.pyplot as plt
 #para cambiar el eje y 
 from matplotlib import ticker
+#Defino algunos parametros del plot (tamaño de los label, titulo, etc)
+from matplotlib import rcParams
+rcParams['font.family'] = 'serif'
+rcParams['font.size'] = 20
+rcParams['axes.labelsize']=25
+rcParams['axes.titlesize']=25
+rcParams['legend.fontsize']=20
 
 from numba import autojit
+
+#Metodo explicito usando cython
+from cython_method import explicit_cython
+from cython_method import explicit_cython2
+from cython_method import explicit_cython3
+
+#################################################################################
+#Metodos explicitos
+#################################################################################
 
 def explicit_py(u, kappa, dt, dz, const, nz):
     un = u.copy()
@@ -24,6 +45,42 @@ def explicit_slicing(u, kappa, dt, dz, const):
     u[1:-1] = un[1:-1] + kappa*dt/dz**2*(un[2:] - 2*un[1:-1] + un[:-2]) + const[1:-1]
     return u
 
+#################################################################################
+#Metodos Implicitos
+#################################################################################
+def implicit_scipy(u, kappa, dt, dz, T0, const, nz, plot_time):
+    #Matriz tridiagonal
+    lamnda = ( kappa * dt ) / dz**2
+    diag_central = np.array([1 + 2 * lamnda for i in range(nz-2)])
+    diag_sup = np.array([-lamnda for i in range(nz-2)])
+    A = sp.dia_matrix(([diag_central, diag_sup, diag_sup], [0, 1, -1]), shape=(nz-2, nz-2))
+    A = A.tocsc()
+
+    #La factorizo en una LU
+    A_LU  = splinalg.splu(A)
+    
+    #Vector b solucion
+    b = np.zeros(nz-2)
+    b_out = np.zeros(nz)
+    b_out[-1] = T0
+    u_out = []
+    u_out.append(b_out.copy())
+    
+    for i in range(len(plot_time) - 1):
+        for k in range(plot_time[i], plot_time[i+1]):
+            #Condicion de contorno
+            b[-1] = b[-1] + lamnda*T0
+            #Le sumo el vector de constantes
+            b = b + const[1:-1]
+            b = A_LU.solve(b)
+        b_out[1:-1] = b
+        u_out.append(b_out.copy())
+        
+    return u_out
+
+#################################################################################
+#Solve. 
+#################################################################################
 def solve_explicit(z_total=35000, dz=1750, t_total=3.1536e14, dt=3.1536e8, T0=727, 
                   kappa=1e-6, A0=2e-6, p=5500, C=1260, L=10000, CFL=0.5, 
                   amount_plot = 2, metodo = 'explicit_slicing'):
@@ -37,7 +94,7 @@ def solve_explicit(z_total=35000, dz=1750, t_total=3.1536e14, dt=3.1536e8, T0=72
     z_total  : integer
         profundidad total. [z] = m.
     dz : float
-        Paso en la dimención Z. [dz] = m.
+        Paso en la dimencion Z. [dz] = m.
     t_total : float
         tiempo total de calculo. [t_total] = s.
     dt : float
@@ -70,7 +127,7 @@ def solve_explicit(z_total=35000, dz=1750, t_total=3.1536e14, dt=3.1536e8, T0=72
         Algunas propiedades del problema (dz, dt, z, t_total, nx, nt)
     '''
     
-    #Cálculo de cantidad de puntos en la dimensión Z (nz) como z_total/dz.
+    #Calculo de cantidad de puntos en la dimension Z (nz) como z_total/dz.
     #Chequeo que nz sea entero. De no serlo, recalculo z_total.
     if z_total%dz == 0:
         nz = z_total//dz
@@ -84,7 +141,7 @@ def solve_explicit(z_total=35000, dz=1750, t_total=3.1536e14, dt=3.1536e8, T0=72
     if dt > condicion_cfl:
         dt = condicion_cfl
     
-    #Cálculo de cantidad de puntos en la dimensión temporal (nt) como t_total/dt.
+    #Calculo de cantidad de puntos en la dimension temporal (nt) como t_total/dt.
     #Chequeo que nt sea entero. De no serlo, recalculo t_total.
     if t_total%dt == 0:
         nt = int(t_total//dt)
@@ -92,7 +149,7 @@ def solve_explicit(z_total=35000, dz=1750, t_total=3.1536e14, dt=3.1536e8, T0=72
         t_total = t_total + (dt - t_total%dt)
         nt = int(t_total//dt)
     
-    #Inicialización de los array
+    #Inicializacion de los array
     #Array de espacio
     z = np.array(range(0, z_total, dz))
 
@@ -137,12 +194,27 @@ def solve_explicit(z_total=35000, dz=1750, t_total=3.1536e14, dt=3.1536e8, T0=72
             for k in range(plot_time[i], plot_time[i+1]):
                 u = explicit_numba(u, kappa, dt, dz, const, nz)
             u_out.append(u.copy())
+            
+    elif metodo == 'explicit_cython':
+        k = explicit_cython.explicit_cython(u, kappa, dt, dz, const, nz, plot_time)
+        return k, prop
+    
+    elif metodo == 'explicit_cython2':
+        k = explicit_cython2.explicit_cython(u, kappa, dt, dz, const, nz, np.array(plot_time))
+        return k, prop
+    
+    elif metodo == 'explicit_cython3':
+        k = explicit_cython3.explicit_cython(u, kappa, dt, dz, const, nz, np.array(plot_time))
+        return k, prop
     
     elif metodo == 'explicit_slicing':
         for i in range(len(plot_time) - 1):
             for k in range(plot_time[i], plot_time[i+1]):
                 u = explicit_slicing(u, kappa, dt, dz, const)
             u_out.append(u.copy())
+            
+    elif metodo == 'implicit_scipy':
+        u_out = implicit_py(u, kappa, dt, dz, T0, const, nz, plot_time)
     
     else:
         print('No existe ese metodo')
@@ -150,6 +222,9 @@ def solve_explicit(z_total=35000, dz=1750, t_total=3.1536e14, dt=3.1536e8, T0=72
     
     return u_out, prop
 
+#################################################################################
+#Pretty Plot
+#################################################################################
 def pretty_plot(T_out, prop, marker_plot = '-'):
     ''' Pretty plot to show solution of solve_explicit
     
@@ -158,7 +233,7 @@ def pretty_plot(T_out, prop, marker_plot = '-'):
     T_out : array
             Arrays de salida de solve_explicito
     prop : dictionary
-            Diccionario con algunas propiedades de la solución numérica (dt, dz, z_total, etc)
+            Diccionario con algunas propiedades de la solucion numorica (dt, dz, z_total, etc)
             
     marker_plot : str
             Marcador para hacer el plot
